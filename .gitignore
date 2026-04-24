@@ -1,0 +1,26 @@
+# MATLAB autosaves and temp files
+*.asv
+*.m~
+*.autosave
+
+# MATLAB compiled / output
+*.mex*
+*.slxc
+
+# MATLAB preferences / project files
+*.mlx.bak
+Thumbs.db
+.DS_Store
+
+# Simulation outputs (keep small fixtures under tests/fixtures/ if needed)
+results_*.mat
+*.mat
+!tests/fixtures/**/*.mat
+
+# Figures
+figures/
+*.fig
+
+# Editor
+.vscode/
+.idea/
