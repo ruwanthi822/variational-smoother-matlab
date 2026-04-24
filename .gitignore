@@ -12,10 +12,11 @@
 Thumbs.db
 .DS_Store
 
-# Simulation outputs (keep small fixtures under tests/fixtures/ if needed)
+# Simulation outputs (keep small fixtures under tests/fixtures/ or data/ if needed)
 results_*.mat
 *.mat
 !tests/fixtures/**/*.mat
+!data/**/*.mat
 
 # Figures
 figures/

@@ -2,21 +2,25 @@ function [rho_new, sigma2_eps_new, lambda_t, Sigma_t] = ...
          m_step(z_smooth, sigma2_smooth, A, Y, rho_old, cfg)
 %M_STEP  Update AR(1) parameters (rho, sigma2_eps) from smoothed
 %        estimates, then recompute lambda_t and Sigma_t.
+%        Matches Master_updated.m M-step block.
 %
-%   lambda_t = lambda_base * sigmoid(z_smooth_t)
+%   lambda_t = lambda_base * sigmoid(z_smooth)
 %   Sigma_t  = lambda_t * Sigma_{t-1} + (1 - lambda_t) * Y_t
+%
+%   Note: the caller may override rho_new with a fixed value via
+%         cfg.em.rho_fixed after this function returns.
 %
 %   Inputs
 %       z_smooth, sigma2_smooth, A : outputs of backward_smoother
-%       Y                          : [T x p x p] Wishart observations
+%       Y                          : [T x p x p]
 %       rho_old                    : previous rho (fallback if denom ~ 0)
 %       cfg                        : config struct
 %
 %   Outputs
-%       rho_new       : scalar, clipped to cfg.em.rho_bounds
-%       sigma2_eps_new: scalar, clipped to cfg.em.sigma2_eps_bounds
-%       lambda_t      : [1 x T]
-%       Sigma_t       : [T x p x p]
+%       rho_new        : clipped to cfg.em.rho_bounds
+%       sigma2_eps_new : floored at cfg.em.sigma2_eps_floor
+%       lambda_t       : [1 x T]
+%       Sigma_t        : [T x p x p]
 
     T  = numel(z_smooth);
     p  = cfg.sim.p;
@@ -30,8 +34,7 @@ function [rho_new, sigma2_eps_new, lambda_t, Sigma_t] = ...
         term_c = -2 * rho_old * (A(t-1) * sigma2_smooth(t) + z_smooth(t) * z_smooth(t-1));
         sum_s2 = sum_s2 + term_a + term_b + term_c;
     end
-    s2_raw = sum_s2 / (T - 1);
-    sigma2_eps_new = max(min(s2_raw, cfg.em.sigma2_eps_bounds(2)), cfg.em.sigma2_eps_bounds(1));
+    sigma2_eps_new = max(sum_s2 / (T - 1), cfg.em.sigma2_eps_floor);
 
     % -------- update rho --------
     num = 0; den = 0;

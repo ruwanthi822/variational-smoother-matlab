@@ -2,13 +2,20 @@ function smoke_test()
 %SMOKE_TEST  Minimal sanity test — small T, small p, no plots. Verifies
 %            the pipeline runs end-to-end and produces finite MSE.
 
+    % make sure the parent folder (which holds the + packages) is on the path
+    this_dir   = fileparts(mfilename('fullpath'));
+    parent_dir = fileparts(this_dir);
+    if ~any(strcmpi(regexp(path, pathsep, 'split'), parent_dir))
+        addpath(parent_dir);
+    end
+
     fprintf('-- smoke_test: running mini pipeline --\n');
 
     cfg = config.default();
     cfg.sim.p    = 5;
     cfg.sim.T    = 120;
     cfg.sim.seed = 1;
-    cfg.em.max_iter    = 5;
+    cfg.em.max_iter    = 10;       % small for speed
     cfg.vi.VI_iter     = 1;
     cfg.em.verbose     = false;
     cfg.bsampler.L     = 3;

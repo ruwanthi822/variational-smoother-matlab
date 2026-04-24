@@ -1,9 +1,14 @@
 function [Sigma_t, lambda_t, z_smooth, rho, sigma2_eps, history] = ...
          run_em(Y, Sigma_init, cfg)
 %RUN_EM  Adaptive-lambda EM over the latent AR(1) state z_t.
+%        Matches Master_updated.m convergence / fixed-rho behaviour.
 %
 %   Alternates the E-step (adaptive.forward_filter + adaptive.backward_smoother)
-%   with the M-step (adaptive.m_step) until lambda_t (or Sigma_t) converges.
+%   with the M-step (adaptive.m_step). Optionally overrides rho with
+%   cfg.em.rho_fixed (a stabilizing trick used in Master_updated).
+%
+%   Convergence criterion: relative delta of sigma2_eps below cfg.em.tol
+%   after the first two iterations.
 %
 %   Inputs
 %       Y          : [T x p x p] Wishart observations
@@ -23,14 +28,14 @@ function [Sigma_t, lambda_t, z_smooth, rho, sigma2_eps, history] = ...
     rho        = cfg.em.rho_init;
     sigma2_eps = cfg.em.sigma2_eps_init;
     Sigma_t    = Sigma_init;
+    lambda_t   = cfg.smoother.lambda_base * ones(1, T);
 
-    lambda_t_prev = zeros(1, T);
-    Sigma_prev    = Sigma_t;
+    history.lambda      = zeros(cfg.em.max_iter, T);
+    history.rho         = zeros(1, cfg.em.max_iter);
+    history.sigma2_eps  = zeros(1, cfg.em.max_iter);
+    history.delta_s2    = zeros(1, cfg.em.max_iter);
 
-    history.lambda     = zeros(cfg.em.max_iter, T);
-    history.rho        = zeros(1, cfg.em.max_iter);
-    history.sigma2_eps = zeros(1, cfg.em.max_iter);
-    history.delta      = zeros(1, cfg.em.max_iter);
+    sigma2_eps_prev = sigma2_eps;
 
     for iter = 1:cfg.em.max_iter
         % E-step
@@ -43,42 +48,46 @@ function [Sigma_t, lambda_t, z_smooth, rho, sigma2_eps, history] = ...
         [rho, sigma2_eps, lambda_t, Sigma_t] = ...
             adaptive.m_step(z_smooth, s2_smooth, A, Y, rho, cfg);
 
-        % convergence
-        d_lam = max(abs(lambda_t - lambda_t_prev));
-        d_Sig = max(abs(Sigma_t(:) - Sigma_prev(:)));
-        if strcmpi(cfg.em.convergence_on, 'sigma')
-            delta = d_Sig;
+        % optional rho override (Master_updated pins rho at rho_fixed)
+        if isfield(cfg.em, 'rho_fixed') && ~isempty(cfg.em.rho_fixed)
+            rho = cfg.em.rho_fixed;
+        end
+
+        % relative change of sigma2_eps (skip iter 1)
+        if iter > 1
+            delta_s2 = abs(sigma2_eps - sigma2_eps_prev) / max(abs(sigma2_eps_prev), eps);
         else
-            delta = d_lam;
+            delta_s2 = Inf;
         end
 
         history.lambda(iter,:)     = lambda_t;
         history.rho(iter)          = rho;
         history.sigma2_eps(iter)   = sigma2_eps;
-        history.delta(iter)        = delta;
+        history.delta_s2(iter)     = delta_s2;
 
         if cfg.em.verbose
-            fprintf('  EM iter %2d  Dlam=%.4f  DSig=%.4f  rho=%.4f  sig2eps=%.4g\n', ...
-                    iter, d_lam, d_Sig, rho, sigma2_eps);
+            fprintf('  EM iter %3d  Ds2/s2=%.2e  rho=%.4f  sig2eps=%.4g  ', ...
+                    iter, delta_s2, rho, sigma2_eps);
+            fprintf('lam[min,mean,max]=[%.3f, %.3f, %.3f]\n', ...
+                    min(lambda_t), mean(lambda_t), max(lambda_t));
         end
 
-        if delta < cfg.em.tol
+        if iter > 2 && delta_s2 < cfg.em.tol
             if cfg.em.verbose
-                fprintf('  EM converged at iter %d (delta=%.4g)\n', iter, delta);
+                fprintf('  EM converged at iter %d (Ds2/s2=%.2e)\n', iter, delta_s2);
             end
-            history.lambda     = history.lambda(1:iter, :);
-            history.rho        = history.rho(1:iter);
-            history.sigma2_eps = history.sigma2_eps(1:iter);
-            history.delta      = history.delta(1:iter);
+            history.lambda      = history.lambda(1:iter, :);
+            history.rho         = history.rho(1:iter);
+            history.sigma2_eps  = history.sigma2_eps(1:iter);
+            history.delta_s2    = history.delta_s2(1:iter);
             return;
         end
 
-        lambda_t_prev = lambda_t;
-        Sigma_prev    = Sigma_t;
+        sigma2_eps_prev = sigma2_eps;
     end
 
     if cfg.em.verbose
-        fprintf('  EM reached max_iter=%d without converging (final delta=%.4g)\n', ...
-                cfg.em.max_iter, delta);
+        fprintf('  EM reached max_iter=%d without converging (Ds2/s2=%.2e)\n', ...
+                cfg.em.max_iter, delta_s2);
     end
 end

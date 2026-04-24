@@ -10,11 +10,14 @@ smoothing dial λ(t) learned by EM.
 ```
 variational-smoother-matlab/
 ├── main.m                      Top-level end-to-end script
+├── data/
+│   └── C.mat                   Bundled ground-truth trajectory (600 x 20 x 20)
 ├── +config/
 │   └── default.m               Single source of truth for every tunable constant
 ├── +sim/
 │   ├── step_truth.m            Ground-truth C(t) with a brief off-diagonal pulse
 │   ├── linear_truth.m          Ground-truth C(t) with a linear transition
+│   ├── load_mat.m              Load a pre-computed C trajectory from a .mat file
 │   └── sample_wishart.m        Draws Y_t ~ Wishart(k, C_t), computes X_true
 ├── +estimators/
 │   ├── forward_filter.m        Sigma_t forward recursion (fixed or time-varying lambda)

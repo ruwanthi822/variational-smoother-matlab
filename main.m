@@ -18,10 +18,15 @@ clear; clc; close all;
 cfg = config.default();
 fprintf('== Building ground-truth covariance (type=%s) ==\n', cfg.sim.truth_type);
 switch lower(cfg.sim.truth_type)
-    case 'step',   C_true = sim.step_truth(cfg);
-    case 'linear', C_true = sim.linear_truth(cfg);
-    otherwise,     error('Unknown truth_type: %s', cfg.sim.truth_type);
+    case 'step',     C_true = sim.step_truth(cfg);
+    case 'linear',   C_true = sim.linear_truth(cfg);
+    case 'load_mat', C_true = sim.load_mat(cfg);
+    otherwise,       error('Unknown truth_type: %s', cfg.sim.truth_type);
 end
+
+% sync T and p with whatever the ground truth actually is
+cfg.sim.T = size(C_true, 1);
+cfg.sim.p = size(C_true, 2);
 
 [Y, X_true] = sim.sample_wishart(C_true, cfg);
 T = cfg.sim.T;
@@ -40,8 +45,10 @@ fprintf('== Backward sampler (L=%d) ==\n', cfg.bsampler.L);
 
 %% ---------- 4. adaptive-lambda EM ----------
 fprintf('== Adaptive-lambda EM ==\n');
+t_em_start = cputime;
 [Sigma_em, lambda_t, z_smooth, rho, sigma2_eps, em_hist] = ...
     adaptive.run_em(Y, Sigma_f, cfg);
+T_em = cputime - t_em_start;
 
 %% ---------- 5 & 6. first and second order VI (adaptive lambda) ----------
 fprintf('== VI first-order backward pass ==\n');
@@ -52,63 +59,78 @@ fprintf('== VI second-order backward pass ==\n');
 [~, ~, V2, X_vi2, C_vi2, STD_pvi2, STD_cvi2, T_vi2] = ...
     estimators.vi_second_order(Sigma_em, lambda_t, cfg, T_f);
 
-%% ---------- 7. MSE comparison ----------
-fprintf('\n== MSE in dB (lower is better) ==\n');
+%% ---------- 7. MSE + timing comparison ----------
+%   Timings follow the convention T_* returned by each estimator:
+%     T_f, T_b are for const-lambda FF / BS.
+%     T_em    is wall-clock of the adaptive-lambda EM (outer loop).
+%     T_vi and T_vi2 are FF + VI (const-lambda), not inclusive of EM cost;
+%     we add T_em to get the "total cost when running on adaptive-lambda".
+T_timing = struct();
+T_timing.forward_filter   = T_f;
+T_timing.backward_sampler = T_b;
+T_timing.em               = T_em;
+T_timing.vi_first_total   = T_em + T_vi;
+T_timing.vi_second_total  = T_em + T_vi2;
+
+fprintf('\n== MSE in dB (lower is better)   and   wall-clock time (s) ==\n');
 methods = {
-    'forward filter',    X_f,   C_f;
-    'backward sampler',  X_b,   C_b;
-    'VI first order',    X_vi1, C_vi1;
-    'VI second order',   X_vi2, C_vi2;
+    'forward filter',    X_f,   C_f,   T_timing.forward_filter;
+    'backward sampler',  X_b,   C_b,   T_timing.backward_sampler;
+    'VI first order',    X_vi1, C_vi1, T_timing.vi_first_total;
+    'VI second order',   X_vi2, C_vi2, T_timing.vi_second_total;
 };
 
 mse_table_prec = struct([]);
 mse_table_cov  = struct([]);
+fprintf('%-18s  %-38s  %-38s  %-8s\n', '', 'precision  [total / off-diag] dB', ...
+        'covariance [total / off-diag] dB', 'time s');
 for m = 1:size(methods, 1)
     name = methods{m, 1};
     Xe   = methods{m, 2};
     Ce   = methods{m, 3};
+    tm   = methods{m, 4};
 
     [mse_p_tot, mse_p_off] = metrics.mse_db(X_true, Xe);
     [mse_c_tot, mse_c_off] = metrics.mse_db(C_true, Ce);
 
-    fprintf('%-18s   X: total=%7.2f dB  off=%7.2f dB    C: total=%7.2f dB  off=%7.2f dB\n', ...
-            name, mse_p_tot, mse_p_off, mse_c_tot, mse_c_off);
+    fprintf('%-18s  %8.2f / %8.2f                %8.2f / %8.2f                %7.3f\n', ...
+            name, mse_p_tot, mse_p_off, mse_c_tot, mse_c_off, tm);
 
     mse_table_prec(end+1).name    = name; %#ok<*SAGROW>
     mse_table_prec(end  ).mse_tot = mse_p_tot;
     mse_table_prec(end  ).mse_off = mse_p_off;
+    mse_table_prec(end  ).time_s  = tm;
 
     mse_table_cov (end+1).name    = name;
     mse_table_cov (end  ).mse_tot = mse_c_tot;
     mse_table_cov (end  ).mse_off = mse_c_off;
+    mse_table_cov (end  ).time_s  = tm;
 end
+fprintf('(EM wall-clock alone = %.3f s, included in VI rows above)\n', T_em);
 
-%% ---------- 8. plots ----------
-prec_estimates(1) = struct('name','forward',   'X', X_f,   'STD', STD_pf);
-prec_estimates(2) = struct('name','backward',  'X', X_b,   'STD', STD_pb);
-prec_estimates(3) = struct('name','VI 1st',    'X', X_vi1, 'STD', STD_pvi);
-prec_estimates(4) = struct('name','VI 2nd',    'X', X_vi2, 'STD', STD_pvi2);
+%% ---------- 8. plots: everything in one tiled figure ----------
+methods_struct(1) = struct('name','Forward Filter',   'X_p', X_f,   'STD_p', STD_pf, ...
+                           'X_c', C_f,   'STD_c', STD_cf);
+methods_struct(2) = struct('name','Backward Sampler', 'X_p', X_b,   'STD_p', STD_pb, ...
+                           'X_c', C_b,   'STD_c', STD_cb);
+methods_struct(3) = struct('name','VI 1st order',     'X_p', X_vi1, 'STD_p', STD_pvi, ...
+                           'X_c', C_vi1, 'STD_c', STD_cvi);
+methods_struct(4) = struct('name','VI 2nd order',     'X_p', X_vi2, 'STD_p', STD_pvi2, ...
+                           'X_c', C_vi2, 'STD_c', STD_cvi2);
 
-cov_estimates(1)  = struct('name','forward',   'X', C_f,   'STD', STD_cf);
-cov_estimates(2)  = struct('name','backward',  'X', C_b,   'STD', STD_cb);
-cov_estimates(3)  = struct('name','VI 1st',    'X', C_vi1, 'STD', STD_cvi);
-cov_estimates(4)  = struct('name','VI 2nd',    'X', C_vi2, 'STD', STD_cvi2);
-
-plotting.entry_with_ci(t_axis, X_true, prec_estimates, cfg, 'precision');
-plotting.entry_with_ci(t_axis, C_true, cov_estimates,  cfg, 'covariance');
-plotting.lambda_trajectory(lambda_t, cfg);
-plotting.mse_summary(mse_table_prec);   title('MSE — precision');
-plotting.mse_summary(mse_table_cov);    title('MSE — covariance');
+plotting.grid_all(t_axis, X_true, C_true, methods_struct, ...
+                  lambda_t, mse_table_prec, mse_table_cov, cfg);
 
 %% ---------- save a summary .mat for later comparison ----------
 ts = datestr(now, 'yyyymmdd_HHMMSS');
 save(sprintf('results_%s.mat', ts), ...
      'cfg', 'C_true', 'X_true', 'Y', ...
-     'Sigma_f', 'X_f', 'C_f', ...
-     'X_b', 'C_b', ...
+     'Sigma_f', 'X_f', 'C_f', 'STD_pf', 'STD_cf', ...
+     'X_b', 'C_b', 'STD_pb', 'STD_cb', ...
      'Sigma_em', 'lambda_t', 'z_smooth', 'rho', 'sigma2_eps', 'em_hist', ...
      'V0', 'V1', 'V2', ...
-     'X_vi1', 'C_vi1', 'X_vi2', 'C_vi2', ...
-     'mse_table_prec', 'mse_table_cov');
+     'X_vi1', 'C_vi1', 'STD_pvi',  'STD_cvi', ...
+     'X_vi2', 'C_vi2', 'STD_pvi2', 'STD_cvi2', ...
+     'mse_table_prec', 'mse_table_cov', 'T_timing');
 
 fprintf('\nResults saved to results_%s.mat\n', ts);
